@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from functools import wraps
 from typing import Any
 
-from ansible_base.rbac.api.permissions import IsSystemAdminOrAuditor
 from ansible_base.rest_pagination import DefaultPaginator
 from dateutil.relativedelta import relativedelta
 from django.db import models
@@ -28,6 +27,7 @@ from rest_framework.viewsets import ReadOnlyModelViewSet
 
 from apps.dashboard_reports.filters import CustomReportFilter, DateFilter, validate_custom_period_dates
 from apps.dashboard_reports.models import JobData, JobHostSummary, JobLabel, JobStatusChoices, SubscriptionCost
+from apps.dashboard_reports.permissions import IsDashboardViewer, permitted_awx_view_org_ids
 from apps.dashboard_reports.serializers import (
     ReportDetailSerializer,
     ReportSerializer,
@@ -369,7 +369,7 @@ class DashboardReportViewSet(ReadOnlyModelViewSet):
     DefaultPaginator), not absolute URLs.
     """
 
-    permission_classes = [IsSystemAdminOrAuditor]
+    permission_classes = [IsDashboardViewer]
     pagination_class = DashboardReportPagination
 
     detail_query_parameters = DETAIL_QUERY_PARAMETERS
@@ -499,7 +499,7 @@ class DashboardReportViewSet(ReadOnlyModelViewSet):
         so its custom manager methods (after_date, organizations, etc.) are available.
         filter_queryset() then only applies OrderingFilter to the resulting ValuesQuerySet.
         """
-        base_qs = self._filter_raw_jobdata_queryset(JobData.objects.all())
+        base_qs = self._filter_raw_jobdata_queryset(self._scoped_jobdata_queryset())
         return self._build_aggregated_queryset(base_qs)
 
     def filter_queryset(self, queryset: QuerySet) -> QuerySet:
@@ -541,7 +541,7 @@ class DashboardReportViewSet(ReadOnlyModelViewSet):
         """
         Returns paginated report data for dashboard, including label IDs per template row.
         """
-        base_qs = self._filter_raw_jobdata_queryset(JobData.objects.all())
+        base_qs = self._filter_raw_jobdata_queryset(self._scoped_jobdata_queryset())
         queryset = self.filter_queryset(self._build_aggregated_queryset(base_qs))
         page = self.paginate_queryset(queryset)
         if page is not None:
@@ -615,6 +615,14 @@ class DashboardReportViewSet(ReadOnlyModelViewSet):
             end_date = end_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0) + relativedelta(months=1)
         return start_date, end_date, kind
 
+    def _scoped_jobdata_queryset(self) -> QuerySet[JobData]:
+        """Org-scoped JobData base queryset: dashboard role-holders only see their organizations' job data."""
+        qs = JobData.objects.all()
+        awx_org_ids = permitted_awx_view_org_ids(self.request.user)
+        if awx_org_ids is not None:
+            qs = qs.filter(organization_id__in=awx_org_ids)
+        return qs
+
     def _filter_raw_jobdata_queryset(self, queryset: QuerySet[JobData]) -> QuerySet[JobData]:
         """Apply all filter backends except OrderingFilter to the raw JobDataQuerySet."""
         for backend in self.filter_backends:
@@ -628,7 +636,7 @@ class DashboardReportViewSet(ReadOnlyModelViewSet):
         Prepares job and host chart querysets for the given kind.
         Returns: (job_chart_qs, host_chart_qs)
         """
-        qs = self._filter_raw_jobdata_queryset(JobData.objects.all())
+        qs = self._filter_raw_jobdata_queryset(self._scoped_jobdata_queryset())
         qs = qs.values(date=Trunc(expression="finished", kind=kind, output_field=models.DateTimeField())).filter(
             date=OuterRef("term")
         )
@@ -848,7 +856,7 @@ class DashboardReportViewSet(ReadOnlyModelViewSet):
          - Top users and projects identify the most active users and projects in the given date range.
          All data is filtered by the provided date range and any additional filters (organization, template, label, project).
         """
-        filtered_qs = self._filter_raw_jobdata_queryset(JobData.objects.all())
+        filtered_qs = self._filter_raw_jobdata_queryset(self._scoped_jobdata_queryset())
 
         ### TOP USERS ###
         top_users_qs = (
@@ -968,7 +976,7 @@ class DashboardReportViewSet(ReadOnlyModelViewSet):
             content_type="text/csv; charset=UTF-8",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
-        base_qs = self._filter_raw_jobdata_queryset(JobData.objects.all())
+        base_qs = self._filter_raw_jobdata_queryset(self._scoped_jobdata_queryset())
         qs = self.filter_queryset(self._build_aggregated_queryset(base_qs))
 
         if export_format == "csv":  # This check is here for future extensibility when we add PDF export

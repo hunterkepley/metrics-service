@@ -46,7 +46,9 @@ class AWXQuery(enum.Enum):
     RETENTION_SETTINGS = RETENTION_SETTINGS_QUERY
 
 
-def _build_where_clause(join_alias: str, search_str: str | None, pk: Any) -> tuple[str, list[Any]]:
+def _build_where_clause(
+    join_alias: str, search_str: str | None, pk: Any, org_scope_sql: str | None = None, org_ids: list[int] | None = None
+) -> tuple[str, list[Any]]:
     """Build WHERE clause and parameters for SQL query."""
     where_clauses = []
     params = []
@@ -58,6 +60,10 @@ def _build_where_clause(join_alias: str, search_str: str | None, pk: Any) -> tup
     if pk is not None:
         where_clauses.append(f"{join_alias}id = %s")
         params.append(pk)
+    if org_scope_sql is not None and org_ids is not None:
+        # Org-scoped dashboard access: restrict rows to the given organizations
+        where_clauses.append(org_scope_sql)
+        params.append(list(org_ids))
     clause = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
     return clause, params
 
@@ -78,7 +84,9 @@ def _execute_count_query(db_connection, count_query: str, params: list[Any]) -> 
         return cursor.fetchone()[0]
 
 
-def fetch_data_from_db(awx_query: AWXQuery, join_alias: str = "", **kwargs: Any) -> tuple[list[Any], int]:
+def fetch_data_from_db(
+    awx_query: AWXQuery, join_alias: str = "", org_scope_sql: str | None = None, **kwargs: Any
+) -> tuple[list[Any], int]:
     """
     Execute a parameterized SQL query against the AWX database with optional search, pk, limit, and offset filters.
 
@@ -87,6 +95,9 @@ def fetch_data_from_db(awx_query: AWXQuery, join_alias: str = "", **kwargs: Any)
     When ``limit`` is omitted (e.g. single-row retrieve by pk), returns all matching rows and derives
     the total from the result length.
 
+    When ``org_scope_sql`` is given and the caller passes ``org_ids`` (dashboard org-scoped access),
+    the scope clause is ANDed into the WHERE clause.
+
     Returns ``(rows, total_count)``.
     """
     db_connection = kwargs.get("db_connection")
@@ -94,9 +105,10 @@ def fetch_data_from_db(awx_query: AWXQuery, join_alias: str = "", **kwargs: Any)
     pk = kwargs.get("pk")
     limit = kwargs.get("limit")
     offset = kwargs.get("offset", 0)
+    org_ids = kwargs.get("org_ids")
 
     base_query = awx_query.value
-    where_clause, params = _build_where_clause(join_alias, search_str, pk)
+    where_clause, params = _build_where_clause(join_alias, search_str, pk, org_scope_sql, org_ids)
     order_clause = f" ORDER BY {join_alias}name"
 
     if limit is not None:
@@ -135,14 +147,21 @@ def format_label_rows(rows: list[Any], duplicate_names: set[str]) -> list[dict[s
     return items
 
 
-def _fetch_duplicate_label_names(db_connection, join_alias: str, search_str: str | None, pk: Any) -> set[str]:
+def _fetch_duplicate_label_names(
+    db_connection,
+    join_alias: str,
+    search_str: str | None,
+    pk: Any,
+    org_scope_sql: str | None = None,
+    org_ids: list[int] | None = None,
+) -> set[str]:
     """
     Return the set of label names that occur more than once across the *complete* matching dataset.
 
-    Uses the same WHERE filters (search/pk) as the main label query but ignores LIMIT/OFFSET, so
+    Uses the same WHERE filters (search/pk/org scope) as the main label query but ignores LIMIT/OFFSET, so
     that duplicate detection is correct even when results are paginated.
     """
-    where_clause, params = _build_where_clause(join_alias, search_str, pk)
+    where_clause, params = _build_where_clause(join_alias, search_str, pk, org_scope_sql, org_ids)
     query = (
         f"SELECT name FROM ({AWXQuery.LABELS.value}{where_clause}) AS _dup_subq "  # noqa: S608 AWXQuery enum value is hardcoded; where_clause uses %s placeholders
         "GROUP BY name HAVING COUNT(*) > 1"
@@ -153,7 +172,7 @@ def _fetch_duplicate_label_names(db_connection, join_alias: str, search_str: str
 
 
 def fetch_id_name(
-    awx_query: AWXQuery, join_alias: str = "", error_msg: str = "", **kwargs
+    awx_query: AWXQuery, join_alias: str = "", error_msg: str = "", org_scope_sql: str | None = None, **kwargs
 ) -> tuple[list[dict[str, Any]], int]:
     """
     Fetch id/name pairs from the AWX database and return ``(items, total_count)``.
@@ -162,7 +181,7 @@ def fetch_id_name(
     or the length of the result set otherwise.  Raises the underlying exception after logging on failure.
     """
     try:
-        rows, total = fetch_data_from_db(awx_query, join_alias=join_alias, **kwargs)
+        rows, total = fetch_data_from_db(awx_query, join_alias=join_alias, org_scope_sql=org_scope_sql, **kwargs)
     except Exception:
         logger.exception(error_msg)
         raise
@@ -171,13 +190,22 @@ def fetch_id_name(
 
 def fetch_organizations(**kwargs) -> tuple[list[dict[str, Any]], int]:
     """Fetch organizations from DB, returning ``(items, total_count)``."""
-    return fetch_id_name(AWXQuery.ORGANIZATIONS, error_msg="Error fetching organizations from AWX database", **kwargs)
+    return fetch_id_name(
+        AWXQuery.ORGANIZATIONS,
+        error_msg="Error fetching organizations from AWX database",
+        org_scope_sql="id = ANY(%s)",
+        **kwargs,
+    )
 
 
 def fetch_templates(**kwargs) -> tuple[list[dict[str, Any]], int]:
     """Fetch job templates from DB, returning ``(items, total_count)``."""
     return fetch_id_name(
-        AWXQuery.TEMPLATES, join_alias="ujt.", error_msg="Error fetching job templates from AWX database", **kwargs
+        AWXQuery.TEMPLATES,
+        join_alias="ujt.",
+        error_msg="Error fetching job templates from AWX database",
+        org_scope_sql="ujt.organization_id = ANY(%s)",
+        **kwargs,
     )
 
 
@@ -197,7 +225,11 @@ def fetch_job_types_for_ids(db_connection, job_ids: list[int]) -> dict[int, str]
 def fetch_projects(**kwargs) -> tuple[list[dict[str, Any]], int]:
     """Fetch projects from DB, returning ``(items, total_count)``."""
     return fetch_id_name(
-        AWXQuery.PROJECTS, join_alias="ujt.", error_msg="Error fetching projects from AWX database", **kwargs
+        AWXQuery.PROJECTS,
+        join_alias="ujt.",
+        error_msg="Error fetching projects from AWX database",
+        org_scope_sql="ujt.organization_id = ANY(%s)",
+        **kwargs,
     )
 
 
@@ -213,9 +245,16 @@ def fetch_labels(**kwargs) -> tuple[list[dict[str, Any]], int]:
     """
     join_alias = "l."
     try:
-        rows, total = fetch_data_from_db(AWXQuery.LABELS, join_alias=join_alias, **kwargs)
+        rows, total = fetch_data_from_db(
+            AWXQuery.LABELS, join_alias=join_alias, org_scope_sql="l.organization_id = ANY(%s)", **kwargs
+        )
         duplicate_names = _fetch_duplicate_label_names(
-            kwargs.get("db_connection"), join_alias, kwargs.get("search_str"), kwargs.get("pk")
+            kwargs.get("db_connection"),
+            join_alias,
+            kwargs.get("search_str"),
+            kwargs.get("pk"),
+            "l.organization_id = ANY(%s)",
+            kwargs.get("org_ids"),
         )
     except Exception:
         logger.exception("Error fetching labels from AWX database")

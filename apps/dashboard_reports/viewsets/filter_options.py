@@ -4,7 +4,6 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from ansible_base.rbac.api.permissions import IsSystemAdminOrAuditor
 from ansible_base.rest_pagination import DefaultPaginator
 from rest_framework import status
 from rest_framework.request import Request
@@ -12,6 +11,7 @@ from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 
 from apps.dashboard_reports.models import JobData
+from apps.dashboard_reports.permissions import IsDashboardViewer, permitted_awx_view_org_ids
 from apps.dashboard_reports.serializers import (
     FilterOptionWithIdSerializer,
 )
@@ -30,7 +30,7 @@ class FilterOptionsViewSet(GenericViewSet):
     awx_query_function: Callable[..., tuple[list[dict[str, Any]], int]] | None = None  # To be defined in subclasses
     versioning_class = None  # Disable versioning for this viewset
     pagination_class = DefaultPaginator
-    permission_classes = [IsSystemAdminOrAuditor]
+    permission_classes = [IsDashboardViewer]
 
     list_error_msg = "Failed to fetch records"
     retrieve_error_msg = "Failed to fetch record"
@@ -76,11 +76,15 @@ class FilterOptionsViewSet(GenericViewSet):
             except (ValueError, TypeError):
                 page_num = 1
             offset = (page_num - 1) * (page_size or 0)
+            # Dashboard role-holders only see filter options for their organizations
+            awx_org_ids = permitted_awx_view_org_ids(request.user)
+            scope_kwargs = {} if awx_org_ids is None else {"org_ids": sorted(awx_org_ids)}
             items, total = self.awx_query_function(
                 db_connection=db_connection,
                 search_str=FilterOptionsViewSet.search(request),
                 limit=page_size,
                 offset=offset,
+                **scope_kwargs,
             )
             # Initialise paginator state (count, page, request) using a zero-cost range so
             # that get_paginated_response can build correct next/previous links and the count
@@ -109,7 +113,10 @@ class FilterOptionsViewSet(GenericViewSet):
 
         try:
             db_connection = get_db_connection("awx")
-            data, _ = self.awx_query_function(db_connection=db_connection, pk=pk)
+            # Dashboard role-holders only see filter options for their organizations
+            awx_org_ids = permitted_awx_view_org_ids(request.user)
+            scope_kwargs = {} if awx_org_ids is None else {"org_ids": sorted(awx_org_ids)}
+            data, _ = self.awx_query_function(db_connection=db_connection, pk=pk, **scope_kwargs)
             return self.retrieve_response(data, error_msg=self.not_found_msg(pk))
         except Exception:
             logger.exception(self.retrieve_error_msg)
