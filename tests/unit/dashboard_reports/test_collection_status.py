@@ -20,6 +20,7 @@ PATCH_LATEST_SYNC = (
     "_get_latest_completed_hourly_sync"
 )
 PATCH_PERM = "ansible_base.rbac.api.permissions.IsSystemAdminOrAuditor.has_permission"
+PATCH_DASHBOARD_SCOPE = "apps.dashboard_reports.viewsets.collection_status.dashboard_view_org_ids"
 PATCH_MIN_TS = "apps.dashboard_reports.viewsets.collection_status.JobData.min_timestamp"
 PATCH_SETTING = "apps.dashboard_reports.viewsets.collection_status.Setting"
 INITIAL_COMPLETED_AT = datetime(2026, 9, 29, 10, 0, 0, tzinfo=UTC)
@@ -35,7 +36,7 @@ class TestDashboardCollectionStatusViewSet:
 
     @pytest.fixture(autouse=True)
     def bypass_permissions(self):
-        with patch(PATCH_PERM, return_value=True):
+        with patch(PATCH_PERM, return_value=True), patch(PATCH_DASHBOARD_SCOPE, return_value=None):
             yield
 
     @pytest.fixture(autouse=True)
@@ -63,6 +64,8 @@ class TestDashboardCollectionStatusViewSet:
             "min_collection_timestamp": None,
             "show_leaderboard": False,
             "show_dashboard": False,
+            "scope": "global",
+            "organizations": [],
         }
         mock_task_class.objects.filter.assert_not_called()
 
@@ -109,6 +112,8 @@ class TestDashboardCollectionStatusViewSet:
             "min_collection_timestamp": None,
             "show_leaderboard": True,
             "show_dashboard": True,
+            "scope": "global",
+            "organizations": [],
         }
 
     @patch(PATCH_MIN_TS, return_value=datetime(2024, 3, 1, 8, 30, 0, tzinfo=UTC))
@@ -187,12 +192,72 @@ class TestDashboardCollectionStatusViewSet:
 
 
 @pytest.mark.unit
+class TestCollectionStatusOrgScope:
+    """Access-discovery response for an organization-scoped dashboard user."""
+
+    @patch(PATCH_MIN_TS, return_value=None)
+    @patch(PATCH_FLAG, return_value=True)
+    @patch(PATCH_TASK)
+    @patch(
+        "apps.dashboard_reports.viewsets.collection_status.fetch_organizations",
+        return_value=([{"id": 10, "name": "Org A"}], 1),
+    )
+    @patch("apps.dashboard_reports.viewsets.collection_status.get_db_connection")
+    @patch("apps.dashboard_reports.viewsets.collection_status.permitted_awx_edit_org_ids", return_value={10})
+    @patch("apps.dashboard_reports.viewsets.collection_status.permitted_awx_view_org_ids", return_value={10})
+    @patch(PATCH_DASHBOARD_SCOPE, return_value={1})
+    @patch(PATCH_LATEST_SYNC, return_value=None)
+    def test_org_scope_response(  # noqa: PLR0917
+        self,
+        mock_latest_sync,
+        mock_scope,
+        mock_view_org_ids,
+        mock_edit_org_ids,
+        mock_conn,
+        mock_fetch_orgs,
+        mock_task,
+        mock_flag,
+        mock_min_ts,
+    ):
+        mock_task.objects.filter.return_value.first.return_value = None
+        request = factory.get("/api/v1/dashboard_reports/collection_status/")
+        request.user = MagicMock()
+        response = view(request)
+        assert response.status_code == 200
+        assert response.data["scope"] == "organization"
+        assert response.data["organizations"] == [{"id": 10, "name": "Org A", "can_edit": True}]
+        assert response.data["show_dashboard"] is True
+
+    @patch(PATCH_MIN_TS, return_value=None)
+    @patch(PATCH_FLAG, return_value=True)
+    @patch(PATCH_TASK)
+    @patch(PATCH_DASHBOARD_SCOPE, return_value=set())
+    @patch(PATCH_LATEST_SYNC, return_value=None)
+    def test_no_access_response(
+        self,
+        mock_latest_sync,
+        mock_scope,
+        mock_task,
+        mock_flag,
+        mock_min_ts,
+    ):
+        mock_task.objects.filter.return_value.first.return_value = None
+        request = factory.get("/api/v1/dashboard_reports/collection_status/")
+        request.user = MagicMock()
+        response = view(request)
+        assert response.status_code == 200
+        assert response.data["scope"] == "none"
+        assert response.data["organizations"] == []
+        assert response.data["show_dashboard"] is False
+
+
+@pytest.mark.unit
 class TestLastSync:
     """Tests for last_sync in DashboardCollectionStatusViewSet.list()."""
 
     @pytest.fixture(autouse=True)
     def bypass_permissions(self):
-        with patch(PATCH_PERM, return_value=True):
+        with patch(PATCH_PERM, return_value=True), patch(PATCH_DASHBOARD_SCOPE, return_value=None):
             yield
 
     def _get(self):

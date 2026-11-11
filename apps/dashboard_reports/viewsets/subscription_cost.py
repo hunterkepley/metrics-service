@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from ansible_base.rbac.api.permissions import IsSystemAdminOrAuditor
 from django.db.models import QuerySet
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import status
@@ -10,6 +11,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from apps.dashboard_reports.models import SubscriptionCost
+from apps.dashboard_reports.permissions import IsDashboardViewer
 from apps.dashboard_reports.serializers import SubscriptionCostSerializer
 from apps.dashboard_reports.viewsets.admin_viewsets import GenericAdminViewSet
 
@@ -45,6 +47,17 @@ class SubscriptionCostViewSet(ListModelMixin, UpdateModelMixin, GenericAdminView
     versioning_class = None  # Disable versioning for this viewset
     serializer_class = SubscriptionCostSerializer
     pagination_class = None  # Disable pagination for this viewset
+
+    def get_permissions(self):
+        """Allow dashboard viewers to read global values; settings writes remain system-admin only.
+
+        TODO(ANSTRAT-2508): settings are deferred in the PoC. Once the org-shared
+        settings model is confirmed, organization Editors should write their org's
+        values here instead of the global singleton.
+        """
+        if self.request.method in ("GET", "HEAD", "OPTIONS"):
+            return [IsDashboardViewer()]
+        return [IsSystemAdminOrAuditor()]
 
     def get_queryset(self) -> QuerySet[SubscriptionCost]:
         """Return all SubscriptionCost records, ensuring the singleton exists."""

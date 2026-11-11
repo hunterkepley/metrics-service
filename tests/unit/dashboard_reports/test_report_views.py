@@ -407,6 +407,12 @@ class TestRequireDateRangeCustomPeriod:
 @pytest.mark.django_db
 @pytest.mark.unit
 class TestDashboardReportViewSet:
+    @pytest.fixture(autouse=True)
+    def bypass_org_scope(self):
+        """These tests exercise aggregation mechanics; the org scope is covered separately."""
+        with patch("apps.dashboard_reports.viewsets.dashboard_report.permitted_awx_view_org_ids", return_value=None):
+            yield
+
     @pytest.fixture
     def factory(self):
         return APIRequestFactory()
@@ -445,6 +451,7 @@ class TestDashboardReportViewSet:
             "start_date": now - timedelta(days=7),
             "end_date": now,
         }
+        viewset.request = MagicMock()
         # Patch _filter_raw_jobdata_queryset to return mock_jobdata so that
         # _build_aggregated_queryset receives it and the mock chain above resolves.
         with patch.object(viewset, "_filter_raw_jobdata_queryset", return_value=mock_jobdata):

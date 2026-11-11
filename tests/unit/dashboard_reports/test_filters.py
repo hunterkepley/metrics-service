@@ -241,6 +241,12 @@ class TestSafeInt:
 class TestFilterOptionsViewSet:
     """Test for FilterOptionsViewSet class."""
 
+    @pytest.fixture(autouse=True)
+    def bypass_org_scope(self):
+        """These tests exercise pagination/error handling; org scoping is covered separately."""
+        with patch("apps.dashboard_reports.viewsets.filter_options.permitted_awx_view_org_ids", return_value=None):
+            yield
+
     @pytest.fixture
     def viewset(self):
         vs = FilterOptionsViewSet()

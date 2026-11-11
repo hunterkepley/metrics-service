@@ -19,6 +19,6 @@ class Organization(AbstractOrganization):
     class Meta:
         permissions = [
             ("member_organization", "User is member of this organization"),
-            ("view_automation_dashboard_organization", "User can view the automation dashboard for this organization"),
-            ("change_automation_dashboard_organization", "User can edit the automation dashboard for this organization"),
+            ("view_automation_dashboard", "User can view the automation dashboard for this organization"),
+            ("change_automation_dashboard", "User can edit the automation dashboard for this organization"),
         ]

@@ -11,8 +11,15 @@ AWX filter-dropdown queries are keyed by AWX organization ids. The two id spaces
 bridged through the shared ansible_id (DAB resource registry): the permitted local
 orgs' ansible_ids are resolved in the mservice database, then mapped to AWX org ids
 through the AWX database's resource registry table.
+
+.. TODO(ANSTRAT-2508): PoC shortcut — this maps to the Controller's numeric
+   organization ID at request time. The production design stores the stable
+   ``organization_ansible_id`` (DAB Resource.ansible_id UUID) on each JobData row
+   via metrics-utility and the backfill command, so report queries do not need a
+   live AWX lookup. Replace this mapping before the production implementation.
 """
 
+import json
 import logging
 
 from ansible_base.rbac.evaluations import has_super_permission
@@ -25,8 +32,8 @@ from apps.tasks.utils import get_db_connection
 
 logger = logging.getLogger(__name__)
 
-VIEW_AUTOMATION_DASHBOARD_ORG_PERMISSION = "view_automation_dashboard_organization"
-CHANGE_AUTOMATION_DASHBOARD_ORG_PERMISSION = "change_automation_dashboard_organization"
+VIEW_AUTOMATION_DASHBOARD_PERMISSION = "view_automation_dashboard"
+CHANGE_AUTOMATION_DASHBOARD_PERMISSION = "change_automation_dashboard"
 
 
 def dashboard_view_org_ids(user) -> set[int] | None:
@@ -38,9 +45,7 @@ def dashboard_view_org_ids(user) -> set[int] | None:
     if not hasattr(user, "_dashboard_view_org_ids"):
         user._dashboard_view_org_ids = {
             int(pk)
-            for pk in Organization.access_qs(
-                user, VIEW_AUTOMATION_DASHBOARD_ORG_PERMISSION
-            ).values_list("id", flat=True)
+            for pk in Organization.access_qs(user, VIEW_AUTOMATION_DASHBOARD_PERMISSION).values_list("id", flat=True)
         }
     return user._dashboard_view_org_ids
 
@@ -54,9 +59,7 @@ def dashboard_edit_org_ids(user) -> set[int] | None:
     if not hasattr(user, "_dashboard_edit_org_ids"):
         user._dashboard_edit_org_ids = {
             int(pk)
-            for pk in Organization.access_qs(
-                user, CHANGE_AUTOMATION_DASHBOARD_ORG_PERMISSION
-            ).values_list("id", flat=True)
+            for pk in Organization.access_qs(user, CHANGE_AUTOMATION_DASHBOARD_PERMISSION).values_list("id", flat=True)
         }
     return user._dashboard_edit_org_ids
 
@@ -104,6 +107,56 @@ def permitted_awx_edit_org_ids(user) -> set[int] | None:
     return _permitted_awx_org_ids(user, dashboard_edit_org_ids(user), "_dashboard_awx_edit_org_ids")
 
 
+def filter_set_organization_ids(filters) -> list[int] | None:
+    """Return the organization IDs selected by a saved report, or None when it spans all visible orgs.
+
+    The dashboard UI stores the organization filter under ``organization``; older saved
+    reports and tests may use ``organization_id`` or ``organizations``. An explicitly
+    empty selection returns ``[]`` (distinct from "no filter").
+    """
+    if not filters:
+        return None
+    if isinstance(filters, str):
+        try:
+            filters = json.loads(filters)
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(filters, dict):
+        return None
+    for key in ("organization", "organization_id", "organizations"):
+        if key in filters:
+            raw = filters[key]
+            if raw is None:
+                return None
+            if not isinstance(raw, (list, tuple)):
+                raw = [raw]
+            ids = []
+            for value in raw:
+                try:
+                    ids.append(int(value))
+                except (TypeError, ValueError):
+                    continue
+            return ids
+    return None
+
+
+def user_can_save_report(user, filters) -> bool:
+    """Return whether the user may save a report covering the given organization filters.
+
+    A system administrator may save anything. An organization-scoped editor may save a
+    report only when every selected organization is one they can edit; a report with no
+    organization filter spans every visible organization, so all of those must be editable.
+    """
+    edit_ids = permitted_awx_edit_org_ids(user)
+    if edit_ids is None:
+        return True
+    selected = filter_set_organization_ids(filters)
+    if selected is None:
+        view_ids = permitted_awx_view_org_ids(user)
+        return bool(view_ids) and view_ids.issubset(edit_ids)
+    return bool(selected) and all(org_id in edit_ids for org_id in selected)
+
+
 class IsDashboardViewer(BasePermission):
     """Dashboard read access: system admins/auditors, or users with a dashboard role on any organization."""
 
@@ -112,8 +165,8 @@ class IsDashboardViewer(BasePermission):
             return False
         if request.method not in SAFE_METHODS:
             return has_super_permission(
-                request.user, "view"
-            )  # writes on read-gated endpoints keep super-view (admin/auditor) behavior
+                request.user
+            )  # writes on read-gated endpoints are system-admin only; auditors stay read-only
         org_ids = dashboard_view_org_ids(request.user)
         return org_ids is None or bool(org_ids)
 
@@ -127,7 +180,7 @@ class IsDashboardEditor(BasePermission):
         if request.method in SAFE_METHODS:
             org_ids = dashboard_view_org_ids(request.user)
             return org_ids is None or bool(org_ids)
-        if has_super_permission(request.user, "view"):
+        if has_super_permission(request.user):
             return True
         org_ids = dashboard_edit_org_ids(request.user)
         return org_ids is None or bool(org_ids)

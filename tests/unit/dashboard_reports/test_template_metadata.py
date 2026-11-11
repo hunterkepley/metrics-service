@@ -140,7 +140,13 @@ class TestTemplateMetadataViewSetConfig(TestCase):
     def test_has_is_system_admin_or_auditor_permission(self):
         from ansible_base.rbac.api.permissions import IsSystemAdminOrAuditor
 
-        assert IsSystemAdminOrAuditor in TemplateMetadataViewSet.permission_classes
+        from apps.dashboard_reports.permissions import IsDashboardViewer
+
+        viewset = TemplateMetadataViewSet()
+        viewset.request = MagicMock(method="GET")
+        assert isinstance(viewset.get_permissions()[0], IsDashboardViewer)
+        viewset.request = MagicMock(method="PUT")
+        assert isinstance(viewset.get_permissions()[0], IsSystemAdminOrAuditor)
 
     def test_has_retrieve_mixin(self):
         from rest_framework.mixins import RetrieveModelMixin
@@ -195,7 +201,7 @@ class TestTemplateMetadataViewSetActions(TestCase):
 
     # ---- GET (retrieve) ----
 
-    @patch("ansible_base.rbac.api.permissions.has_super_permission", return_value=True)
+    @patch("apps.dashboard_reports.permissions.has_super_permission", return_value=True)
     @patch.object(TemplateMetadataViewSet, "get_object")
     def test_retrieve_returns_200(self, mock_get_object, mock_super_perm):
         mock_get_object.return_value = self.instance
@@ -204,7 +210,7 @@ class TestTemplateMetadataViewSetActions(TestCase):
         response = self._call(self._view({"get": "retrieve"}), request)
         assert response.status_code == status.HTTP_200_OK
 
-    @patch("ansible_base.rbac.api.permissions.has_super_permission", return_value=True)
+    @patch("apps.dashboard_reports.permissions.has_super_permission", return_value=True)
     @patch.object(TemplateMetadataViewSet, "get_object")
     def test_retrieve_calls_get_object_once(self, mock_get_object, mock_super_perm):
         mock_get_object.return_value = self.instance
@@ -216,9 +222,10 @@ class TestTemplateMetadataViewSetActions(TestCase):
     # ---- PUT (update) ----
 
     @patch("ansible_base.rbac.api.permissions.has_super_permission", return_value=True)
+    @patch("apps.dashboard_reports.permissions.has_super_permission", return_value=True)
     @patch.object(TemplateMetadataViewSet, "get_object")
     @patch.object(TemplateMetadataViewSet, "perform_update")
-    def test_update_returns_200(self, mock_perform_update, mock_get_object, mock_super_perm):
+    def test_update_returns_200(self, mock_perform_update, mock_get_object, mock_super_perm, mock_dab_super_perm):
         mock_get_object.return_value = self.instance
         self.instance.template_id = 42
         request = self.factory.put(
@@ -234,9 +241,12 @@ class TestTemplateMetadataViewSetActions(TestCase):
         assert response.status_code == status.HTTP_200_OK
 
     @patch("ansible_base.rbac.api.permissions.has_super_permission", return_value=True)
+    @patch("apps.dashboard_reports.permissions.has_super_permission", return_value=True)
     @patch.object(TemplateMetadataViewSet, "get_object")
     @patch.object(TemplateMetadataViewSet, "perform_update")
-    def test_update_calls_perform_update_once(self, mock_perform_update, mock_get_object, mock_super_perm):
+    def test_update_calls_perform_update_once(
+        self, mock_perform_update, mock_get_object, mock_super_perm, mock_dab_super_perm
+    ):
         mock_get_object.return_value = self.instance
         self.instance.template_id = 42
         request = self.factory.put(
@@ -252,9 +262,12 @@ class TestTemplateMetadataViewSetActions(TestCase):
         mock_perform_update.assert_called_once()
 
     @patch("ansible_base.rbac.api.permissions.has_super_permission", return_value=True)
+    @patch("apps.dashboard_reports.permissions.has_super_permission", return_value=True)
     @patch.object(TemplateMetadataViewSet, "get_object")
     @patch.object(TemplateMetadataViewSet, "perform_update")
-    def test_update_with_null_time_fields(self, mock_perform_update, mock_get_object, mock_super_perm):
+    def test_update_with_null_time_fields(
+        self, mock_perform_update, mock_get_object, mock_super_perm, mock_dab_super_perm
+    ):
         mock_get_object.return_value = self.instance
         self.instance.template_id = 42
         request = self.factory.put(

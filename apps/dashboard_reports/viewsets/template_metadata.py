@@ -1,5 +1,6 @@
 """ViewSet for retrieving and updating AWX job template metadata (time estimates)."""
 
+from ansible_base.rbac.api.permissions import IsSystemAdminOrAuditor
 from django.db.models import QuerySet
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, extend_schema_view, inline_serializer
@@ -18,7 +19,7 @@ from apps.dashboard_reports.models import (
     TemplateMetadata,
 )
 from apps.dashboard_reports.permissions import (
-    IsDashboardEditor,
+    IsDashboardViewer,
     dashboard_edit_org_ids,
     permitted_awx_edit_org_ids,
 )
@@ -55,10 +56,20 @@ class TemplateMetadataViewSet(RetrieveModelMixin, UpdateModelMixin, GenericViewS
         GET    api/v1/dashboard_reports/template_metadata/defaults/ - Get default time estimates
     """
 
-    permission_classes = [IsDashboardEditor]
     versioning_class = None
     pagination_class = None
     serializer_class = TemplateMetadataSerializer
+
+    def get_permissions(self):
+        """Allow dashboard viewers to read estimates; writes remain system-admin only.
+
+        TODO(ANSTRAT-2508): settings are deferred in the PoC. Once the org-shared
+        settings model is confirmed, organization Editors should write per-org
+        overrides here rather than the global TemplateMetadata row.
+        """
+        if self.request.method in ("GET", "HEAD", "OPTIONS"):
+            return [IsDashboardViewer()]
+        return [IsSystemAdminOrAuditor()]
 
     def get_queryset(self) -> QuerySet[TemplateMetadata]:
         """Return all TemplateMetadata records."""

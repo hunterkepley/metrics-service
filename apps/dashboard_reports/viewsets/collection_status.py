@@ -7,15 +7,22 @@ from ansible_base.rbac.api.permissions import IsSystemAdminOrAuditor
 from drf_spectacular.utils import extend_schema, extend_schema_view, inline_serializer
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.viewsets import ViewSet
 
+from apps.dashboard_reports.awx_queries import fetch_organizations
 from apps.dashboard_reports.models import JobData
-from apps.dashboard_reports.permissions import IsDashboardViewer
+from apps.dashboard_reports.permissions import (
+    dashboard_view_org_ids,
+    permitted_awx_edit_org_ids,
+    permitted_awx_view_org_ids,
+)
 from apps.dynamic_settings.models import Setting
 from apps.tasks.models import Task, TaskExecution
 from apps.tasks.task_groups import get_feature_enabled_from_db
+from apps.tasks.utils import get_db_connection
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +61,16 @@ logger = logging.getLogger(__name__)
                     "min_collection_timestamp": serializers.DateTimeField(allow_null=True),
                     "show_leaderboard": serializers.BooleanField(),
                     "show_dashboard": serializers.BooleanField(),
+                    "scope": serializers.ChoiceField(choices=["global", "organization", "none"]),
+                    "organizations": inline_serializer(
+                        name="DashboardCollectionOrganization",
+                        fields={
+                            "id": serializers.IntegerField(help_text="AWX organization ID"),
+                            "name": serializers.CharField(allow_null=True),
+                            "can_edit": serializers.BooleanField(),
+                        },
+                        many=True,
+                    ),
                 },
             ),
         },
@@ -62,12 +79,14 @@ logger = logging.getLogger(__name__)
 class DashboardCollectionStatusViewSet(ViewSet):
     """Returns the enabled state and task status for the dashboard reports collection pipeline."""
 
-    permission_classes = [IsDashboardViewer]
+    # GET is an access-discovery endpoint: any authenticated user may ask whether
+    # they can see the dashboard. POST (settings toggle) stays admin-only.
+    permission_classes = [IsAuthenticated]
 
     def get_permissions(self):
-        """Require dashboard viewer for reads; keep create restricted to system admin/auditor."""
+        """Allow reads to any authenticated user; keep create restricted to system admins."""
         if self.request.method in ("GET", "HEAD", "OPTIONS"):
-            return [IsDashboardViewer()]
+            return [IsAuthenticated()]
         return [IsSystemAdminOrAuditor()]
 
     @staticmethod
@@ -106,17 +125,56 @@ class DashboardCollectionStatusViewSet(ViewSet):
             }
         )
 
+    @staticmethod
+    def _accessible_organizations(user) -> list[dict]:
+        """Return the caller's AWX organizations with their dashboard edit capability.
+
+        Best-effort: if the AWX DB is unavailable, return the IDs we already know with a
+        null name rather than failing the whole access-discovery request.
+        """
+        view_ids = permitted_awx_view_org_ids(user)
+        if not view_ids:
+            return []
+        edit_ids = permitted_awx_edit_org_ids(user)
+        try:
+            organizations, _ = fetch_organizations(
+                db_connection=get_db_connection("awx"),
+                org_ids=sorted(view_ids),
+            )
+        except Exception:
+            logger.exception("Unable to resolve accessible dashboard organizations from AWX")
+            return [
+                {"id": org_id, "name": None, "can_edit": edit_ids is None or org_id in edit_ids}
+                for org_id in sorted(view_ids)
+            ]
+        return [
+            {
+                "id": organization["id"],
+                "name": organization["name"],
+                "can_edit": edit_ids is None or organization["id"] in edit_ids,
+            }
+            for organization in organizations
+        ]
+
     def list(self, request: Request, *args, **kwargs) -> Response:
-        """Return dashboard collection feature flag status and task state.
+        """Return dashboard collection feature flag status, task state, and caller access scope.
 
         When enabled is false, next_run and initial_collection_status are null.
         initial_collection_status reflects the status of the one-shot initial collection task:
         "pending", "running", "completed", "failed", or "cancelled".
         """
-        is_system_admin_or_auditor = IsSystemAdminOrAuditor().has_permission(request, self)
         enabled = get_feature_enabled_from_db("DASHBOARD_COLLECTION", default=True)
         show_leaderboard = get_feature_enabled_from_db("SHOW_LEADERBOARD", default=True)
-        show_dashboard = get_feature_enabled_from_db("SHOW_DASHBOARD", default=True) and is_system_admin_or_auditor
+
+        view_org_ids = dashboard_view_org_ids(request.user)
+        if view_org_ids is None:
+            scope = "global"
+        elif view_org_ids:
+            scope = "organization"
+        else:
+            scope = "none"
+        organizations = self._accessible_organizations(request.user) if scope == "organization" else []
+        show_dashboard = get_feature_enabled_from_db("SHOW_DASHBOARD", default=True) and scope != "none"
         last_sync = None
 
         next_run = None
@@ -158,6 +216,8 @@ class DashboardCollectionStatusViewSet(ViewSet):
                 "initial_collection_status": initial_collection_status,
                 "min_collection_timestamp": min_collection_timestamp,
                 "show_leaderboard": show_leaderboard,  # toggle-able by admins/system-auditors
-                "show_dashboard": show_dashboard,  # only if user == admin
+                "show_dashboard": show_dashboard,
+                "scope": scope,
+                "organizations": organizations,
             }
         )
