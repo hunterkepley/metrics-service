@@ -53,6 +53,8 @@ ANSIBLE_BASE_MANAGED_ROLE_REGISTRY = {
     "org_member": {},  # Organization Member - member perm on org
     "team_admin": {},  # Team Admin - all perms on team
     "team_member": {},  # Team Member - member perm on team
+    "org_dashboard_viewer": {},  # Automation Dashboard Viewer - view dashboard perm on org
+    "org_dashboard_editor": {},  # Automation Dashboard Editor - view + edit dashboard perms on org
 }
 
 # Configure which roles can be synced via JWT from gateway

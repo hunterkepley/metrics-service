@@ -1,11 +1,11 @@
 """ViewSet for retrieving and updating AWX job template metadata (time estimates)."""
 
-from ansible_base.rbac.api.permissions import IsSystemAdminOrAuditor
 from django.db.models import QuerySet
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, extend_schema_view, inline_serializer
 from rest_framework import serializers, status
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.mixins import RetrieveModelMixin, UpdateModelMixin
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -14,7 +14,13 @@ from rest_framework.viewsets import GenericViewSet
 from apps.dashboard_reports.models import (
     DEFAULT_TIME_TAKEN_TO_CREATE_AUTOMATION_MINUTES,
     DEFAULT_TIME_TAKEN_TO_MANUALLY_EXECUTE_MINUTES,
+    JobData,
     TemplateMetadata,
+)
+from apps.dashboard_reports.permissions import (
+    IsDashboardEditor,
+    dashboard_edit_org_ids,
+    permitted_awx_edit_org_ids,
 )
 from apps.dashboard_reports.serializers import (
     TemplateMetadataBulkUpdateSerializer,
@@ -49,7 +55,7 @@ class TemplateMetadataViewSet(RetrieveModelMixin, UpdateModelMixin, GenericViewS
         GET    api/v1/dashboard_reports/template_metadata/defaults/ - Get default time estimates
     """
 
-    permission_classes = [IsSystemAdminOrAuditor]
+    permission_classes = [IsDashboardEditor]
     versioning_class = None
     pagination_class = None
     serializer_class = TemplateMetadataSerializer
@@ -57,6 +63,19 @@ class TemplateMetadataViewSet(RetrieveModelMixin, UpdateModelMixin, GenericViewS
     def get_queryset(self) -> QuerySet[TemplateMetadata]:
         """Return all TemplateMetadata records."""
         return TemplateMetadata.objects.all()
+
+    def perform_update(self, serializer):
+        """Org-scoped write check: editors may only update templates whose jobs ran in their organizations."""
+        awx_edit_org_ids = permitted_awx_edit_org_ids(self.request.user)
+        if awx_edit_org_ids is not None:
+            template_org_ids = set(
+                JobData.objects.filter(template_metadata_id=serializer.instance.pk).values_list(
+                    "organization_id", flat=True
+                )
+            )
+            if not template_org_ids & awx_edit_org_ids:
+                raise PermissionDenied("User does not have dashboard editor access to this template's organization.")
+        serializer.save()
 
     @extend_schema(
         operation_id="dashboard_reports_template_metadata_partial_update_all",
@@ -74,6 +93,9 @@ class TemplateMetadataViewSet(RetrieveModelMixin, UpdateModelMixin, GenericViewS
     )
     def partial_update_all(self, request: Request) -> Response:
         """Apply the given time estimates to all template metadata records."""
+        if dashboard_edit_org_ids(request.user) is not None:
+            # Bulk update is a global operation: system administrators only
+            raise PermissionDenied("Bulk template metadata updates require system administrator.")
         serializer = TemplateMetadataBulkUpdateSerializer(
             data=request.data, partial=True, context=self.get_serializer_context()
         )
