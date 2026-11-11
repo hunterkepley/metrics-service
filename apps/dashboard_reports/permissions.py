@@ -25,8 +25,8 @@ from apps.tasks.utils import get_db_connection
 
 logger = logging.getLogger(__name__)
 
-VIEW_CODENAME = "view_dashboard_organization"
-EDIT_CODENAME = "edit_dashboard_organization"
+VIEW_AUTOMATION_DASHBOARD_ORG_PERMISSION = "view_automation_dashboard_organization"
+CHANGE_AUTOMATION_DASHBOARD_ORG_PERMISSION = "change_automation_dashboard_organization"
 
 
 def dashboard_view_org_ids(user) -> set[int] | None:
@@ -37,7 +37,10 @@ def dashboard_view_org_ids(user) -> set[int] | None:
         return None
     if not hasattr(user, "_dashboard_view_org_ids"):
         user._dashboard_view_org_ids = {
-            int(pk) for pk in Organization.access_ids_qs(user, VIEW_CODENAME)
+            int(pk)
+            for pk in Organization.access_ids_qs(
+                user, VIEW_AUTOMATION_DASHBOARD_ORG_PERMISSION
+            )
         }
     return user._dashboard_view_org_ids
 
@@ -50,7 +53,10 @@ def dashboard_edit_org_ids(user) -> set[int] | None:
         return None
     if not hasattr(user, "_dashboard_edit_org_ids"):
         user._dashboard_edit_org_ids = {
-            int(pk) for pk in Organization.access_ids_qs(user, EDIT_CODENAME)
+            int(pk)
+            for pk in Organization.access_ids_qs(
+                user, CHANGE_AUTOMATION_DASHBOARD_ORG_PERMISSION
+            )
         }
     return user._dashboard_edit_org_ids
 
