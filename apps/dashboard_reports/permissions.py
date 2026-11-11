@@ -38,9 +38,9 @@ def dashboard_view_org_ids(user) -> set[int] | None:
     if not hasattr(user, "_dashboard_view_org_ids"):
         user._dashboard_view_org_ids = {
             int(pk)
-            for pk in Organization.access_ids_qs(
+            for pk in Organization.access_qs(
                 user, VIEW_AUTOMATION_DASHBOARD_ORG_PERMISSION
-            )
+            ).values_list("id", flat=True)
         }
     return user._dashboard_view_org_ids
 
@@ -54,9 +54,9 @@ def dashboard_edit_org_ids(user) -> set[int] | None:
     if not hasattr(user, "_dashboard_edit_org_ids"):
         user._dashboard_edit_org_ids = {
             int(pk)
-            for pk in Organization.access_ids_qs(
+            for pk in Organization.access_qs(
                 user, CHANGE_AUTOMATION_DASHBOARD_ORG_PERMISSION
-            )
+            ).values_list("id", flat=True)
         }
     return user._dashboard_edit_org_ids
 
