@@ -7,12 +7,12 @@ from ansible_base.rbac.api.permissions import IsSystemAdminOrAuditor
 from drf_spectacular.utils import extend_schema, extend_schema_view, inline_serializer
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied, ValidationError
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.viewsets import ViewSet
 
 from apps.dashboard_reports.models import JobData
+from apps.dashboard_reports.permissions import IsDashboardViewer
 from apps.dynamic_settings.models import Setting
 from apps.tasks.models import Task, TaskExecution
 from apps.tasks.task_groups import get_feature_enabled_from_db
@@ -62,8 +62,13 @@ logger = logging.getLogger(__name__)
 class DashboardCollectionStatusViewSet(ViewSet):
     """Returns the enabled state and task status for the dashboard reports collection pipeline."""
 
-    # User must be authenticated
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsDashboardViewer]
+
+    def get_permissions(self):
+        """Require dashboard viewer for reads; keep create restricted to system admin/auditor."""
+        if self.request.method in ("GET", "HEAD", "OPTIONS"):
+            return [IsDashboardViewer()]
+        return [IsSystemAdminOrAuditor()]
 
     @staticmethod
     def _get_latest_completed_hourly_sync() -> TaskExecution | None:

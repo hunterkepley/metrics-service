@@ -8,12 +8,12 @@ from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.mixins import CreateModelMixin, DestroyModelMixin, ListModelMixin, UpdateModelMixin
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 
 from apps.dashboard_reports.models import FilterSet
+from apps.dashboard_reports.permissions import IsDashboardEditor
 from apps.dashboard_reports.serializers import FilterSetSerializer
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ class FilterSetsViewSet(ListModelMixin, CreateModelMixin, UpdateModelMixin, Dest
     """
 
     versioning_class = None  # Disable versioning for this viewset
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsDashboardEditor]
     serializer_class = FilterSetSerializer
     pagination_class = DefaultPaginator
 

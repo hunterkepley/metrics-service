@@ -15,8 +15,8 @@ through the AWX database's resource registry table.
 
 import logging
 
-from ansible_base.resource_registry.models import Resource
 from ansible_base.rbac.evaluations import has_super_permission
+from ansible_base.resource_registry.models import Resource
 from django.contrib.contenttypes.models import ContentType
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
@@ -111,7 +111,9 @@ class IsDashboardViewer(BasePermission):
         if not (request.user and request.user.is_authenticated):
             return False
         if request.method not in SAFE_METHODS:
-            return has_super_permission(request.user)  # writes on read-gated endpoints stay admin-only
+            return has_super_permission(
+                request.user, "view"
+            )  # writes on read-gated endpoints keep super-view (admin/auditor) behavior
         org_ids = dashboard_view_org_ids(request.user)
         return org_ids is None or bool(org_ids)
 
@@ -125,5 +127,7 @@ class IsDashboardEditor(BasePermission):
         if request.method in SAFE_METHODS:
             org_ids = dashboard_view_org_ids(request.user)
             return org_ids is None or bool(org_ids)
+        if has_super_permission(request.user, "view"):
+            return True
         org_ids = dashboard_edit_org_ids(request.user)
         return org_ids is None or bool(org_ids)
