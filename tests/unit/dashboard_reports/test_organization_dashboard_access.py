@@ -4,6 +4,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
+from django.test import override_settings
 
 from apps.dashboard_reports.permissions import (
     IsDashboardEditor,
@@ -110,7 +111,7 @@ class TestIsDashboardEditor:
 @pytest.mark.django_db
 @pytest.mark.unit
 class TestDashboardRoleMapping:
-    """Verify the managed roles map to the expected dashboard permissions."""
+    """Verify Org Admin auto-grant and customer-created custom roles."""
 
     @pytest.fixture
     def org(self):
@@ -124,27 +125,50 @@ class TestDashboardRoleMapping:
 
         return User.objects.create_user(username="dashboard-user", email="dash@example.com", password="test")
 
-    def _assign(self, user, org, role_name):
+    def _assign_managed(self, user, org, role_name):
         from ansible_base.rbac.models import RoleDefinition
 
         RoleDefinition.objects.get(name=role_name).give_permission(user, org)
 
+    def _create_custom_role(self, name, permissions):
+        from ansible_base.rbac.models import DABContentType, RoleDefinition
+
+        from apps.core.models import Organization
+
+        org_ct = DABContentType.objects.get_for_model(Organization)
+        return RoleDefinition.objects.create_from_permissions(
+            permissions=permissions,
+            name=name,
+            content_type=org_ct,
+        )
+
     def test_organization_admin_gets_view_and_edit(self, user, org):
-        self._assign(user, org, "Organization Admin")
+        self._assign_managed(user, org, "Organization Admin")
         assert dashboard_view_org_ids(user) == {org.pk}
         assert dashboard_edit_org_ids(user) == {org.pk}
 
-    def test_dashboard_viewer_gets_view_only(self, user, org):
-        self._assign(user, org, "Automation Dashboard Viewer")
+    def test_custom_viewer_role_gets_view_only(self, user, org):
+        role = self._create_custom_role(
+            "Custom Dashboard Viewer",
+            ["view_organization", "view_automation_dashboard"],
+        )
+        role.give_permission(user, org)
         assert dashboard_view_org_ids(user) == {org.pk}
         assert dashboard_edit_org_ids(user) == set()
 
-    def test_dashboard_editor_gets_view_and_edit(self, user, org):
-        self._assign(user, org, "Automation Dashboard Editor")
+    @override_settings(ALLOW_SHARED_RESOURCE_CUSTOM_ROLES=True)
+    def test_custom_editor_role_gets_view_and_edit(self, user, org):
+        # An Editor custom role needs the shared-resource custom-role allowlist
+        # (DAB #1156) because change_automation_dashboard is not a view permission.
+        role = self._create_custom_role(
+            "Custom Dashboard Editor",
+            ["view_organization", "view_automation_dashboard", "change_automation_dashboard"],
+        )
+        role.give_permission(user, org)
         assert dashboard_view_org_ids(user) == {org.pk}
         assert dashboard_edit_org_ids(user) == {org.pk}
 
     def test_organization_member_gets_no_dashboard_access(self, user, org):
-        self._assign(user, org, "Organization Member")
+        self._assign_managed(user, org, "Organization Member")
         assert dashboard_view_org_ids(user) == set()
         assert dashboard_edit_org_ids(user) == set()
