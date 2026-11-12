@@ -14,6 +14,7 @@ from rest_framework.test import APIRequestFactory
 from apps.dashboard_reports.models import (
     DEFAULT_TIME_TAKEN_TO_CREATE_AUTOMATION_MINUTES,
     DEFAULT_TIME_TAKEN_TO_MANUALLY_EXECUTE_MINUTES,
+    JobData,
     TemplateMetadata,
 )
 from apps.dashboard_reports.serializers import TemplateMetadataDefaultsSerializer, TemplateMetadataSerializer
@@ -168,8 +169,12 @@ class TestTemplateMetadataViewSetConfig(TestCase):
 
         assert not issubclass(TemplateMetadataViewSet, CreateModelMixin)
 
+    @patch(
+        "apps.dashboard_reports.viewsets.template_metadata.permitted_awx_view_org_ids",
+        return_value=None,
+    )
     @patch("apps.dashboard_reports.viewsets.template_metadata.TemplateMetadata")
-    def test_get_queryset_calls_objects_all(self, mock_model):
+    def test_get_queryset_calls_objects_all(self, mock_model, mock_org_ids):
         mock_qs = MagicMock()
         mock_model.objects.all.return_value = mock_qs
         viewset = TemplateMetadataViewSet()
@@ -327,6 +332,61 @@ class TestTemplateMetadataViewSetActions(TestCase):
         with patch("ansible_base.rbac.api.permissions.has_super_permission", return_value=False):
             response = self._call(self._view({"patch": "partial_update"}), request)
         assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+# =============================================================================
+# Organization scope
+# =============================================================================
+
+
+@pytest.mark.django_db
+@pytest.mark.unit
+class TestTemplateMetadataOrgScope:
+    """Template metadata reads must follow the caller's dashboard organization scope."""
+
+    @staticmethod
+    def _create_data():
+        in_scope = TemplateMetadata.objects.create(template_name="In Scope", template_id=1001)
+        out_of_scope = TemplateMetadata.objects.create(template_name="Out of Scope", template_id=1002)
+        JobData.objects.create(
+            job_id=1001,
+            template_name="In Scope",
+            template_metadata=in_scope,
+            organization_id=10,
+            elapsed=1,
+        )
+        JobData.objects.create(
+            job_id=1002,
+            template_name="Out of Scope",
+            template_metadata=out_of_scope,
+            organization_id=20,
+            elapsed=1,
+        )
+        return in_scope, out_of_scope
+
+    @staticmethod
+    def _viewset():
+        viewset = TemplateMetadataViewSet()
+        viewset.request = MagicMock()
+        viewset.kwargs = {}
+        viewset.format_kwarg = None
+        return viewset
+
+    @patch(
+        "apps.dashboard_reports.viewsets.template_metadata.permitted_awx_view_org_ids",
+        return_value={10},
+    )
+    def test_org_viewer_only_sees_templates_in_scope(self, mock_org_ids):
+        in_scope, _ = self._create_data()
+        assert list(self._viewset().get_queryset()) == [in_scope]
+
+    @patch(
+        "apps.dashboard_reports.viewsets.template_metadata.permitted_awx_view_org_ids",
+        return_value=None,
+    )
+    def test_global_viewer_sees_all_templates(self, mock_org_ids):
+        in_scope, out_of_scope = self._create_data()
+        assert set(self._viewset().get_queryset()) == {in_scope, out_of_scope}
 
 
 # =============================================================================

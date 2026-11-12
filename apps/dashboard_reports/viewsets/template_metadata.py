@@ -23,6 +23,7 @@ from apps.dashboard_reports.permissions import (
     IsDashboardViewer,
     dashboard_edit_org_ids,
     permitted_awx_edit_org_ids,
+    permitted_awx_view_org_ids,
 )
 from apps.dashboard_reports.serializers import (
     TemplateMetadataBulkUpdateSerializer,
@@ -73,8 +74,16 @@ class TemplateMetadataViewSet(RetrieveModelMixin, UpdateModelMixin, GenericViewS
         return [IsSystemAdminOrAuditor()]
 
     def get_queryset(self) -> QuerySet[TemplateMetadata]:
-        """Return all TemplateMetadata records."""
-        return TemplateMetadata.objects.all()
+        """Return templates represented by jobs in the caller's dashboard organization scope."""
+        queryset = TemplateMetadata.objects.all()
+        awx_org_ids = permitted_awx_view_org_ids(self.request.user)
+        if awx_org_ids is not None:
+            template_ids = JobData.objects.filter(
+                organization_id__in=awx_org_ids,
+                template_metadata_id__isnull=False,
+            ).values_list("template_metadata_id", flat=True)
+            queryset = queryset.filter(pk__in=template_ids)
+        return queryset
 
     def perform_update(self, serializer):
         """Org-scoped write check: editors may only update templates whose jobs ran in their organizations."""
