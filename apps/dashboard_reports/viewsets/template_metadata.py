@@ -8,6 +8,7 @@ from rest_framework import serializers, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.mixins import RetrieveModelMixin, UpdateModelMixin
+from rest_framework.permissions import SAFE_METHODS
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
@@ -67,7 +68,7 @@ class TemplateMetadataViewSet(RetrieveModelMixin, UpdateModelMixin, GenericViewS
         settings model is confirmed, organization Editors should write per-org
         overrides here rather than the global TemplateMetadata row.
         """
-        if self.request.method in ("GET", "HEAD", "OPTIONS"):
+        if self.request.method in SAFE_METHODS:
             return [IsDashboardViewer()]
         return [IsSystemAdminOrAuditor()]
 

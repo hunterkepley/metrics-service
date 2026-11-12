@@ -11,6 +11,7 @@ Covers:
 """
 
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from django.test import TestCase
@@ -698,6 +699,49 @@ class TestFilterSetsUrls(TestCase):
     def test_detail_url_can_be_reversed(self) -> None:
         url = reverse("v1:filter_sets-detail", kwargs={"pk": 1})
         assert "filter_sets" in url and "1" in url
+
+
+# =============================================================================
+# Organization save gate
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestFilterSetsOrgSaveGate(APITestCase):
+    """The editor permission only says "any editable org"; the selected orgs must also match."""
+
+    def setUp(self) -> None:
+        self.user = _create_user(superuser=False)
+        self.client.force_authenticate(user=self.user)
+
+    @patch("apps.dashboard_reports.permissions.permitted_awx_view_org_ids", return_value={1})
+    @patch("apps.dashboard_reports.permissions.permitted_awx_edit_org_ids", return_value={1})
+    @patch("apps.dashboard_reports.permissions.dashboard_edit_org_ids", return_value={1})
+    @patch("apps.dashboard_reports.permissions.dashboard_view_org_ids", return_value={1})
+    def test_editor_can_save_report_for_editable_org(
+        self, mock_view_org_ids, mock_edit_org_ids, mock_permitted_edit, mock_permitted_view
+    ) -> None:
+        response = self.client.post(
+            reverse("v1:filter_sets-list"),
+            {"name": "Org 1 report", "filters": {"organization": ["1"]}, "is_default": False},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+
+    @patch("apps.dashboard_reports.permissions.permitted_awx_view_org_ids", return_value={1})
+    @patch("apps.dashboard_reports.permissions.permitted_awx_edit_org_ids", return_value={1})
+    @patch("apps.dashboard_reports.permissions.dashboard_edit_org_ids", return_value={1})
+    @patch("apps.dashboard_reports.permissions.dashboard_view_org_ids", return_value={1})
+    def test_editor_cannot_save_report_for_other_org(
+        self, mock_view_org_ids, mock_edit_org_ids, mock_permitted_edit, mock_permitted_view
+    ) -> None:
+        response = self.client.post(
+            reverse("v1:filter_sets-list"),
+            {"name": "Org 2 report", "filters": {"organization": ["2"]}, "is_default": False},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert not FilterSet.objects.filter(user=self.user, name="Org 2 report").exists()
 
 
 # =============================================================================

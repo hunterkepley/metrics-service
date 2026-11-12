@@ -7,6 +7,7 @@ from django.db.models import QuerySet
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import status
 from rest_framework.mixins import ListModelMixin, UpdateModelMixin
+from rest_framework.permissions import SAFE_METHODS
 from rest_framework.request import Request
 from rest_framework.response import Response
 
@@ -55,7 +56,7 @@ class SubscriptionCostViewSet(ListModelMixin, UpdateModelMixin, GenericAdminView
         settings model is confirmed, organization Editors should write their org's
         values here instead of the global singleton.
         """
-        if self.request.method in ("GET", "HEAD", "OPTIONS"):
+        if self.request.method in SAFE_METHODS:
             return [IsDashboardViewer()]
         return [IsSystemAdminOrAuditor()]
 
